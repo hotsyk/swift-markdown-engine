@@ -498,17 +498,14 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // (e.g. when the available wiki-link targets change). Cheap pointer-/
         // value-based comparison; full equality isn't required because the
         // embedder is the source of truth.
-        let newImageFingerprint = configuration.services.images.fingerprint()
-        let newWikiFingerprint = configuration.services.wikiLinks.fingerprint()
-        let imageChanged = newImageFingerprint != context.coordinator.lastImageFingerprint
-        let wikiChanged = newWikiFingerprint != context.coordinator.lastWikiFingerprint
-        if imageChanged || wikiChanged {
-            context.coordinator.lastImageFingerprint = newImageFingerprint
-            context.coordinator.lastWikiFingerprint = newWikiFingerprint
+        let serviceChanges = context.coordinator.updateServiceFingerprints(for: configuration.services)
+        if serviceChanges.images || serviceChanges.wikiLinks || serviceChanges.fencedCodeBlockLayout {
             context.coordinator.configuration.services = configuration.services
             textView.configuration.services = configuration.services
-            // Only an image change needs a layout re-measure; a wiki-link rename is style-only.
-            if imageChanged, let tlm = textView.textLayoutManager {
+            // Image and fenced-code reservation changes affect paragraph geometry;
+            // a wiki-link rename is style-only.
+            if serviceChanges.images || serviceChanges.fencedCodeBlockLayout,
+               let tlm = textView.textLayoutManager {
                 tlm.invalidateLayout(for: tlm.documentRange)
             }
             // Restyle live tv content — full rebuild would clobber paste-fresh embeds when `text` binding hasn't caught up.
@@ -625,8 +622,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         )
         coordinator.documentId = documentId
         coordinator.configuration = configuration
-        coordinator.lastImageFingerprint = configuration.services.images.fingerprint()
-        coordinator.lastWikiFingerprint = configuration.services.wikiLinks.fingerprint()
+        _ = coordinator.updateServiceFingerprints(for: configuration.services)
         coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         coordinator.onInlinePreviewKey = onInlinePreviewKey
         coordinator.userPrefersContinuousSpellChecking = configuration.spellChecking.continuousSpellChecking

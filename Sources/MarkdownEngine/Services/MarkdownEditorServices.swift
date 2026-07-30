@@ -152,6 +152,44 @@ public struct PlainTextSyntaxHighlighter: SyntaxHighlighter {
     public var appearanceDidChangeNotification: Notification.Name? { nil }
 }
 
+// MARK: - Fenced Code Block Layout
+
+/// Reserves additional line height for an individual triple-backtick code block.
+///
+/// This seam intentionally follows the legacy parser's supported subset:
+/// closed, column-zero fences made from exactly three backticks. The engine
+/// applies the provider's multiplier to that block's TextKit paragraph metrics
+/// without changing its source. Values are constrained to `1...20`, so this
+/// service can enlarge a block but cannot collapse editable source lines.
+public protocol FencedCodeBlockLayoutProvider: Sendable {
+    /// Returns the requested line-height multiplier for this block.
+    func lineHeightMultiplier(for request: FencedCodeBlockLayoutRequest) -> CGFloat
+
+    /// Coarse fingerprint of the provider's current layout decisions.
+    /// A different value invalidates layout and restyles the document.
+    func fingerprint() -> AnyHashable
+}
+
+/// Source content for a legacy exact-three-backtick, column-zero code block.
+public struct FencedCodeBlockLayoutRequest: Sendable, Equatable {
+    /// The complete trimmed text after the opening three backticks, or `nil` when absent.
+    public let infoString: String?
+    /// The code between the opening and closing triple-backtick fence lines.
+    public let code: String
+
+    public init(infoString: String?, code: String) {
+        self.infoString = infoString
+        self.code = code
+    }
+}
+
+/// Default provider that preserves the configured code line height.
+public struct NoOpFencedCodeBlockLayoutProvider: FencedCodeBlockLayoutProvider {
+    public init() {}
+    public func lineHeightMultiplier(for request: FencedCodeBlockLayoutRequest) -> CGFloat { 1 }
+    public func fingerprint() -> AnyHashable { 0 }
+}
+
 // MARK: - LaTeX
 
 /// Renders LaTeX formulas to images for inline display.
@@ -318,6 +356,7 @@ public struct MarkdownEditorServices: Sendable {
     public var wikiLinks: any WikiLinkResolver
     public var images: any EmbeddedImageProvider
     public var syntaxHighlighter: any SyntaxHighlighter
+    public var fencedCodeBlockLayout: any FencedCodeBlockLayoutProvider
     public var latex: any LatexRenderer
     public var bus: MarkdownEditorBus
 
@@ -325,12 +364,14 @@ public struct MarkdownEditorServices: Sendable {
         wikiLinks: any WikiLinkResolver = NoOpWikiLinkResolver(),
         images: any EmbeddedImageProvider = NoOpEmbeddedImageProvider(),
         syntaxHighlighter: any SyntaxHighlighter = PlainTextSyntaxHighlighter(),
+        fencedCodeBlockLayout: any FencedCodeBlockLayoutProvider = NoOpFencedCodeBlockLayoutProvider(),
         latex: any LatexRenderer = NoOpLatexRenderer(),
         bus: MarkdownEditorBus = .default
     ) {
         self.wikiLinks = wikiLinks
         self.images = images
         self.syntaxHighlighter = syntaxHighlighter
+        self.fencedCodeBlockLayout = fencedCodeBlockLayout
         self.latex = latex
         self.bus = bus
     }

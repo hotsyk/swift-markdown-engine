@@ -22,6 +22,8 @@ import Foundation
 
 enum MarkdownASTStyler {
 
+    private static let maximumCodeBlockLineHeightMultiplier: CGFloat = 20
+
     static func styleAttributes(
         text: String,
         fontName: String,
@@ -489,14 +491,24 @@ enum MarkdownASTStyler {
 
     private static func styleCodeBlock(range: NSRange, ctx: Ctx, into attrs: inout [StyledRange]) {
         let parts = codeBlockParts(range, ctx.ns)
+        let codeContent = ctx.ns.substring(with: parts.content)
+        let requestedMultiplier = ctx.config.services.fencedCodeBlockLayout.lineHeightMultiplier(
+            for: FencedCodeBlockLayoutRequest(infoString: parts.infoString, code: codeContent)
+        )
+        let multiplier = requestedMultiplier.isFinite
+            ? min(max(requestedMultiplier, 1), maximumCodeBlockLineHeightMultiplier)
+            : 1
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.setParagraphStyle(ctx.codeParagraphStyle)
+        paragraphStyle.minimumLineHeight *= multiplier
+        paragraphStyle.maximumLineHeight *= multiplier
         attrs.append((parts.codeRange, [
-            .font: ctx.codeFont, .backgroundColor: ctx.codeBackground, .paragraphStyle: ctx.codeParagraphStyle,
+            .font: ctx.codeFont, .backgroundColor: ctx.codeBackground, .paragraphStyle: paragraphStyle,
         ]))
         // Suppress spell-check underlines on the whole fenced block — code is not prose.
         attrs.append((parts.codeRange, [.spellingState: 0]))
-        let codeContent = ctx.ns.substring(with: parts.content)
         if !codeContent.isEmpty,
-           let highlighted = ctx.config.services.syntaxHighlighter.highlight(code: codeContent, language: parts.language) {
+           let highlighted = ctx.config.services.syntaxHighlighter.highlight(code: codeContent, language: parts.infoString) {
             highlighted.enumerateAttributes(in: NSRange(location: 0, length: highlighted.length)) { a, r, _ in
                 guard let fg = a[.foregroundColor] else { return }
                 attrs.append((NSRange(location: parts.content.location + r.location, length: r.length), [.foregroundColor: fg]))
@@ -510,9 +522,9 @@ enum MarkdownASTStyler {
         attrs.append((parts.closeFence, markerAttrs))
     }
 
-    /// Split a fenced-code range into open fence (+language), content, close fence, and language.
+    /// Split a fenced-code range into open fence (+info string), content, close fence, and info string.
     private static func codeBlockParts(_ range: NSRange, _ ns: NSString)
-        -> (codeRange: NSRange, openFence: NSRange, content: NSRange, closeFence: NSRange, language: String?) {
+        -> (codeRange: NSRange, openFence: NSRange, content: NSRange, closeFence: NSRange, infoString: String?) {
         let start = range.location
         let end = NSMaxRange(range)
         var openEnd = start
@@ -527,13 +539,13 @@ enum MarkdownASTStyler {
         let codeRange = NSRange(location: start, length: NSMaxRange(closeFence) - start)
         let content = NSRange(location: openEnd, length: max(0, lastLine.location - openEnd))
 
-        var language: String?
+        var infoString: String?
         if openFence.length > 3 {
             let raw = ns.substring(with: NSRange(location: start + 3, length: openFence.length - 3))
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            language = raw.isEmpty ? nil : raw
+            infoString = raw.isEmpty ? nil : raw
         }
-        return (codeRange, openFence, content, closeFence, language)
+        return (codeRange, openFence, content, closeFence, infoString)
     }
 
     // MARK: - Inlines (composing)
