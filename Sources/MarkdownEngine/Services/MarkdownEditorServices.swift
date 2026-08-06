@@ -130,6 +130,17 @@ public protocol SyntaxHighlighter: Sendable {
     /// to this notification so it can invalidate cached attributes.
     /// Return `nil` if the highlighter never changes after construction.
     var appearanceDidChangeNotification: Notification.Name? { get }
+
+    /// Fingerprint over the highlighter's visual inputs (font, colors).
+    /// The engine compares this on every configuration update and restyles
+    /// in place when it changes. The default (`0`) means "never changes
+    /// after construction", preserving prior behavior for existing
+    /// conformers.
+    var styleFingerprint: Int { get }
+}
+
+public extension SyntaxHighlighter {
+    var styleFingerprint: Int { 0 }
 }
 
 /// Default highlighter that produces no highlighting and supplies a

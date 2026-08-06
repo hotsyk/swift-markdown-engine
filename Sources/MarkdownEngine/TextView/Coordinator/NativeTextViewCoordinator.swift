@@ -57,6 +57,7 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     var lastImageFingerprint: AnyHashable?
     var lastWikiFingerprint: AnyHashable?
     var lastFencedCodeBlockLayoutFingerprint: AnyHashable?
+    var lastStyleFingerprint: Int?
     private var busObservers: [NSObjectProtocol] = []
     private var registeredAppearanceObserverName: Notification.Name?
     weak var textView: NSTextView?
