@@ -436,20 +436,37 @@ enum BlockParser {
         return after == " " || after == "\t"
     }
 
-    /// A GFM table row: `^[ \t]*\|.+\|[ \t]*$` — outer pipes, content between.
+    /// A GFM table row with two or more meaningful pipe-separated cells.
+    /// The leading and trailing pipes are independently optional.
     private static func isTableRow(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.count >= 3 && t.hasPrefix("|") && t.hasSuffix("|")
+        tableCells(in: line) != nil
     }
 
-    /// A GFM table separator: `^[ \t]*\|[- \t:|]+\|[ \t]*$` — only `- : |` + ws inside.
+    /// A GFM table separator. Outer pipes are optional, but every internal
+    /// pipe-separated cell must contain a dash and only separator characters.
     private static func isTableSeparator(_ line: String) -> Bool {
-        let t = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.count >= 3, t.hasPrefix("|"), t.hasSuffix("|") else { return false }
-        let middle = t.dropFirst().dropLast()
-        return !middle.isEmpty && middle.allSatisfy {
-            $0 == "-" || $0 == ":" || $0 == "|" || $0 == " " || $0 == "\t"
+        guard let cells = tableCells(in: line) else { return false }
+        return cells.allSatisfy { cell in
+            cell.contains("-") && cell.allSatisfy {
+                $0 == "-" || $0 == ":" || $0 == " " || $0 == "\t"
+            }
         }
+    }
+
+    /// Strips optional outer pipes and returns non-empty cells only when the
+    /// remaining content contains a meaningful internal pipe separator.
+    private static func tableCells(in line: String) -> [Substring]? {
+        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        var body = trimmed[...]
+        if body.first == "|" { body = body.dropFirst() }
+        if body.last == "|" { body = body.dropLast() }
+        guard body.contains("|") else { return nil }
+
+        let cells = body.split(separator: "|", omittingEmptySubsequences: false)
+        guard cells.count >= 2, cells.allSatisfy({
+            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else { return nil }
+        return cells
     }
 
     /// A block-LaTeX opener: a line whose content starts with `$$`.

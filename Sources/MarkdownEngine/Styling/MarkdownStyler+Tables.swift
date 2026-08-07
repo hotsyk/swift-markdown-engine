@@ -377,7 +377,7 @@ extension MarkdownStyler {
         return NSFont(descriptor: baseDescriptor.withSymbolicTraits(traits), size: pointSize) ?? current
     }
 
-    /// Walk the inline AST into marker-stripped runs; LaTeX as attachments, links/embeds emitted raw.
+    /// Walk the inline AST into marker-stripped runs; LaTeX as attachments and links as styled labels.
     private static func appendInlineCell(
         _ nodes: [InlineNode],
         in ns: NSString,
@@ -434,8 +434,20 @@ extension MarkdownStyler {
                 } else {
                     appendPlain(range, font)   // renderer unavailable → keep raw `$…$`
                 }
-            case .link(let range, _, _, _, _),
-                 .image(let range, _, _, _),
+            case .link(_, _, let urlRange, _, let children):
+                let start = out.length
+                recurse(children, font)
+                let renderedRange = NSRange(location: start, length: out.length - start)
+                var urlString = ns.substring(with: urlRange)
+                if !urlString.contains("://") { urlString = "https://\(urlString)" }
+                if renderedRange.length > 0, let url = URL(string: urlString) {
+                    out.addAttributes([
+                        .link: url,
+                        .underlineStyle: NSUnderlineStyle.single.rawValue,
+                        .foregroundColor: theme.link,
+                    ], range: renderedRange)
+                }
+            case .image(let range, _, _, _),
                  .wikiLink(let range, _, _, _),
                  .imageEmbed(let range, _, _):
                 appendPlain(range, font)
