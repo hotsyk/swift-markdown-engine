@@ -335,21 +335,31 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             textView.centerReadingColumn(forClipWidth: scrollView.contentView.bounds.width)
         }
         scrollView.contentView.postsBoundsChangedNotifications = true
-        var lastObservedViewportWidth = scrollView.contentView.bounds.width
+        var lastObservedViewportSize = scrollView.contentView.bounds.size
         NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: scrollView.contentView, queue: nil) { _ in
-            // Refresh code-block overlays only on real viewport width changes, not on TextKit height-only echoes during typing.
-            let newWidth = scrollView.contentView.bounds.width
-            if abs(newWidth - lastObservedViewportWidth) > 0.5 {
-                lastObservedViewportWidth = newWidth
+            // Refresh width-sensitive layout only on real viewport width changes,
+            // not on TextKit height-only echoes during typing. Typewriter mode also
+            // observes height because its center changes with the visible viewport.
+            let newSize = scrollView.contentView.bounds.size
+            let widthChanged = abs(newSize.width - lastObservedViewportSize.width) > 0.5
+            let heightChanged = abs(newSize.height - lastObservedViewportSize.height) > 0.5
+            let viewportChanged = widthChanged || heightChanged
+            if viewportChanged { lastObservedViewportSize = newSize }
+            if widthChanged {
                 // Re-center the column by position (no redraw) so it stays smooth during live resize.
                 // Read readingWidth from the live textView.configuration (a class, captured by
                 // reference) instead of the struct `configuration` captured by value at
                 // makeNSView time — the embedder may change readingWidth between updates.
                 if textView.configuration.readingWidth != nil {
-                    textView.centerReadingColumn(forClipWidth: newWidth)
+                    textView.centerReadingColumn(forClipWidth: newSize.width)
                 }
                 context.coordinator.didEnsureLayoutForCurrentDocument = false
                 context.coordinator.updateCodeBlockSelection(textView: textView)
+            }
+            if viewportChanged {
+                // Run after this resize pass so any width-driven rewrap and
+                // overscroll/container resize have settled.
+                context.coordinator.scheduleTypewriterCentering(for: textView)
             }
             // Only react with overscroll recalc when the viewport itself resizes
             // (window resize). Without this guard, TextKit-induced frame changes echo
@@ -429,6 +439,17 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             if #available(macOS 15.0, *), textView.isWritingToolsActive { return true }
             return context.coordinator.isWritingToolsActive
         }()
+
+        // Focus mode is a rendering-only runtime setting: update it independently
+        // of the style fingerprint so toggling it neither rebuilds storage nor
+        // disturbs undo history or authored Markdown attributes. Keep this before
+        // the Writing Tools early return so mode changes remain immediate.
+        let focusModeChanged = context.coordinator.configuration.focusMode != configuration.focusMode
+        context.coordinator.configuration.focusMode = configuration.focusMode
+        textView.configuration.focusMode = configuration.focusMode
+        if focusModeChanged {
+            context.coordinator.applyFocusRendering(to: textView)
+        }
 
         if wtActive && isNodeSwitch {
             // User switched files while Writing Tools was active — discard the
@@ -626,7 +647,10 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             // Drop old document's wide-table overlays synchronously.
             textView.removeAllWideTableOverlays()
             // Park at top during the rebuild; the new document's own saved offset
-            // (if any) is restored after its height is known (see below).
+            // (if any) is restored after its height is known (see below). This is
+            // an explicit document-navigation intent and must beat caret centering
+            // already queued during the update pass.
+            (nsView as? ClampedScrollView)?.cancelPendingTypewriterCentering()
             nsView.contentView.scroll(to: NSPoint(x: 0, y: -nsView.contentInsets.top))
             nsView.reflectScrolledClipView(nsView.contentView)
             (nsView as? ClampedScrollView)?.clampToInsets()
@@ -661,6 +685,9 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // `isNodeSwitch`, because a remount is not a switch and its first pass still
         // carries the embedder's empty buffer — the clamp would pull it back to top.
         if context.coordinator.pendingScrollRestoreDocumentId == documentId {
+            // Restoration (including the no-saved-offset top position) has higher
+            // priority than any Typewriter centering queued while rebuilding.
+            (nsView as? ClampedScrollView)?.cancelPendingTypewriterCentering()
             context.coordinator.pendingScrollRestoreAttempts -= 1
             let saved = restoreScrollOffset?(documentId) ?? context.coordinator.scrollOffsets[documentId]
             if let savedY = saved {

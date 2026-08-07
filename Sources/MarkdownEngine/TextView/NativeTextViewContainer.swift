@@ -20,11 +20,11 @@ import AppKit
 
 final class NativeTextViewContainer: NSView {
     /// The body. Sizes its OWN height (content + overscroll); the container only moves
-    /// it below the header band and sizes itself to the sum.
+    /// it below the header band/top slack and sizes itself to the sum.
     weak var textView: NativeTextView?
 
-    /// Reserved header band height (mirrors the clip's resolved height). Sole driver of
-    /// the vertical stack: the text view sits at `y = headerHeight`.
+    /// Reserved header band height (mirrors the clip's resolved height). The text
+    /// body sits below this band and any Typewriter-mode top centering slack.
     var headerHeight: CGFloat = 0 {
         didSet {
             guard abs(headerHeight - oldValue) > 0.01 else { return }
@@ -45,21 +45,24 @@ final class NativeTextViewContainer: NSView {
 
     private var isRestacking = false
 
-    /// Flipped (top-left origin) to match `NSTextView`, so `y = headerHeight` means
-    /// "below the header" and the text view's local space is a pure translation of the
+    /// Flipped (top-left origin) to match `NSTextView`, so increasing Y moves the
+    /// body below the header/top slack and its local space is a pure translation of the
     /// container's. A non-flipped container would invert the stack and break every
     /// `convert(_:to:)`-based coordinate path.
     override var isFlipped: Bool { true }
 
-    /// Real scrollable height = header band + the text view's real content (no
-    /// min-viewport inflation), so the scroll view can't scroll past actual content.
+    /// Real scrollable height = header band + Typewriter top slack + the text
+    /// view's real content (no min-viewport inflation), so clamping uses exactly
+    /// the whitespace required to center the first and final visual lines.
     var scrollableContentHeight: CGFloat {
-        headerHeight + (textView?.scrollableContentHeight ?? 0)
+        headerHeight
+            + (textView?.activeTopOverscroll ?? 0)
+            + (textView?.scrollableContentHeight ?? 0)
     }
 
     /// Single layout method. Moves the text view below the header (ORIGIN only — never
     /// `setFrameSize`, so the text view's self-measure isn't re-triggered) and sizes the
-    /// container to `headerHeight + textViewHeight` (min the viewport). The header clip
+    /// container to `headerHeight + topSlack + textViewHeight` (min the viewport). The header clip
     /// is positioned by its own Auto Layout against this container, so it isn't touched.
     func restack(propagateWidth: Bool) {
         guard !isRestacking, let textView else { return }
@@ -81,15 +84,16 @@ final class NativeTextViewContainer: NSView {
         // Y: below the header band. X is owned by the reading-column centering
         // (0 in full-width mode) — preserve it here.
         let x = textView.configuration.readingWidth != nil ? textView.frame.origin.x : 0
-        if abs(textView.frame.origin.y - headerHeight) > 0.01 || abs(textView.frame.origin.x - x) > 0.01 {
-            let deltaY = headerHeight - textView.frame.origin.y
-            textView.setFrameOrigin(NSPoint(x: x, y: headerHeight))
+        let bodyOriginY = headerHeight + textView.activeTopOverscroll
+        if abs(textView.frame.origin.y - bodyOriginY) > 0.01 || abs(textView.frame.origin.x - x) > 0.01 {
+            let deltaY = bodyOriginY - textView.frame.origin.y
+            textView.setFrameOrigin(NSPoint(x: x, y: bodyOriginY))
             // Breakout wide-table overlays are siblings whose frames bake in the
             // text view's offset — keep them glued to their anchor paragraphs.
             textView.shiftWideTableOverlays(byY: deltaY)
         }
         let viewportH = enclosingScrollView?.contentView.bounds.height ?? 0
-        let stacked = headerHeight + textView.frame.height
+        let stacked = bodyOriginY + textView.frame.height
         let totalH = (textView.configuration.heightBehavior == .fitsContent) ? stacked
                                                                               : max(stacked, viewportH)
         if abs(frame.height - totalH) > 0.5 {

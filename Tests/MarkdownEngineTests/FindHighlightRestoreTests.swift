@@ -59,6 +59,24 @@ struct FindHighlightRestoreTests {
         tv.textStorage?.attribute(.backgroundColor, at: location, effectiveRange: nil) as? NSColor
     }
 
+    private func renderedForeground(_ tv: NativeTextView, at offset: Int) -> NSColor? {
+        guard let layoutManager = tv.textLayoutManager,
+              let contentManager = layoutManager.textContentManager else { return nil }
+        let documentStart = contentManager.documentRange.location
+        var color: NSColor?
+        layoutManager.enumerateRenderingAttributes(from: documentStart, reverse: false) {
+            _, attributes, range in
+            let start = contentManager.offset(from: documentStart, to: range.location)
+            let end = contentManager.offset(from: documentStart, to: range.endLocation)
+            if offset >= start && offset < end {
+                color = attributes[.foregroundColor] as? NSColor
+                return false
+            }
+            return true
+        }
+        return color
+    }
+
     private func find(_ query: String, _ coordinator: NativeTextViewCoordinator) {
         coordinator.handleFindQuery(Notification(
             name: Notification.Name("findQuery"),
@@ -107,5 +125,62 @@ struct FindHighlightRestoreTests {
 
         #expect(background(tv, at: Self.blockContent.location) == NSColor.white)
         #expect(background(tv, at: 17) != nil)
+    }
+
+    @Test("find restoration and focus toggles preserve Markdown-owned ink")
+    func focusAndFindKeepStylingIsolated() {
+        let (coordinator, tv) = makeEditor(Self.text)
+        coordinator.configuration.focusMode = .sentence
+        // A nonempty selection is the exact focus range, so the extension span
+        // is dimmed even though this fixture contains only one sentence.
+        tv.setSelectedRange(NSRange(location: 17, length: 4))
+        coordinator.applyFocusRendering(to: tv)
+
+        #expect(renderedForeground(tv, at: Self.blockContent.location)
+                == coordinator.configuration.theme.mutedText)
+        #expect(tv.textStorage?.attribute(
+            .foregroundColor,
+            at: Self.blockContent.location,
+            effectiveRange: nil
+        ) as? NSColor == .black)
+
+        find("marked", coordinator)
+        let activeFindBackground = background(tv, at: Self.blockContent.location)
+        #expect(activeFindBackground != .white)
+        #expect(renderedForeground(tv, at: Self.blockContent.location)
+                == coordinator.configuration.theme.mutedText)
+
+        // Toggling focus while find owns the background must neither dismiss
+        // the active match nor lose the extension foreground underneath.
+        coordinator.configuration.focusMode = .disabled
+        coordinator.applyFocusRendering(to: tv)
+        #expect(renderedForeground(tv, at: Self.blockContent.location) == nil)
+        #expect(background(tv, at: Self.blockContent.location) == activeFindBackground)
+        #expect(tv.textStorage?.attribute(
+            .foregroundColor,
+            at: Self.blockContent.location,
+            effectiveRange: nil
+        ) as? NSColor == .black)
+
+        coordinator.configuration.focusMode = .sentence
+        coordinator.applyFocusRendering(to: tv)
+        #expect(renderedForeground(tv, at: Self.blockContent.location)
+                == coordinator.configuration.theme.mutedText)
+        #expect(background(tv, at: Self.blockContent.location) == activeFindBackground)
+
+        done(coordinator)
+        #expect(background(tv, at: Self.blockContent.location) == .white)
+        #expect(renderedForeground(tv, at: Self.blockContent.location)
+                == coordinator.configuration.theme.mutedText)
+
+        coordinator.configuration.focusMode = .disabled
+        coordinator.applyFocusRendering(to: tv)
+        #expect(renderedForeground(tv, at: Self.blockContent.location) == nil)
+        #expect(tv.textStorage?.attribute(
+            .foregroundColor,
+            at: Self.blockContent.location,
+            effectiveRange: nil
+        ) as? NSColor == .black)
+        #expect(background(tv, at: Self.blockContent.location) == .white)
     }
 }

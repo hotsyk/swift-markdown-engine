@@ -165,6 +165,9 @@ extension NativeTextViewCoordinator {
             }
             tlm.ensureLayout(for: tlm.documentRange)
         }
+        // Rendering attributes are separate from the rebuilt storage, so apply
+        // focus last and leave every authored Markdown attribute untouched.
+        applyFocusRendering(to: textView)
 
         // The re-entrant textViewDidChangeSelection was suppressed for this rebuild
         // (isRebuildingDocument), so replay the one selection-derived side effect nothing
@@ -231,6 +234,9 @@ extension NativeTextViewCoordinator {
             precomputedBlocks: blocks,
             configuration: configuration
         )
+        // Scoped restyles can replace authored foregrounds under the overlay;
+        // reapplying focus keeps the overlay deterministic without rewriting them.
+        applyFocusRendering(to: textView)
         // Reconcile wide-table overlays after layout settles.
         if let nativeTextView = textView as? NativeTextView {
             DispatchQueue.main.async { [weak nativeTextView] in

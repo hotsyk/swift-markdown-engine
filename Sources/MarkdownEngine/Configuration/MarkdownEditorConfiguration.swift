@@ -40,6 +40,10 @@ public struct MarkdownEditorConfiguration: Sendable {
     public var blockquote: BlockquoteStyle
     public var link: LinkStyle
     public var paragraph: ParagraphStyle
+    /// The editor's effective focus behavior. Embedders that persist an
+    /// enable/disable toggle separately should pass `.disabled` while that
+    /// toggle is off; the engine does not retain a previously selected mode.
+    public var focusMode: FocusMode
     public var overscroll: OverscrollPolicy
     public var dragSelection: DragSelectionPolicy
     public var safeAreaInsets: SafeAreaInsets
@@ -100,6 +104,7 @@ public struct MarkdownEditorConfiguration: Sendable {
         blockquote: BlockquoteStyle = .default,
         link: LinkStyle = .default,
         paragraph: ParagraphStyle = .default,
+        focusMode: FocusMode = .disabled,
         overscroll: OverscrollPolicy = .default,
         dragSelection: DragSelectionPolicy = .default,
         safeAreaInsets: SafeAreaInsets = .default,
@@ -126,6 +131,7 @@ public struct MarkdownEditorConfiguration: Sendable {
         self.blockquote = blockquote
         self.link = link
         self.paragraph = paragraph
+        self.focusMode = focusMode
         self.overscroll = overscroll
         self.dragSelection = dragSelection
         self.safeAreaInsets = safeAreaInsets
@@ -495,6 +501,25 @@ public struct ParagraphStyle: Sendable {
     }
 
     public static let `default` = ParagraphStyle()
+}
+
+// MARK: - Focus mode
+
+/// The effective focus behavior applied by the editor.
+///
+/// Use ``disabled`` when focus mode is turned off. ``sentence`` and
+/// ``paragraph`` select the text range that remains emphasized, while
+/// ``typewriter`` controls scroll geometry without defining a text focus
+/// range. Switching modes at runtime is supported.
+public enum FocusMode: Sendable, Equatable, Hashable {
+    /// No focus styling or typewriter scrolling.
+    case disabled
+    /// Emphasize the sentence containing the insertion point.
+    case sentence
+    /// Emphasize the paragraph containing the insertion point.
+    case paragraph
+    /// Keep the insertion point vertically centered while editing.
+    case typewriter
 }
 
 // MARK: - Bottom overscroll

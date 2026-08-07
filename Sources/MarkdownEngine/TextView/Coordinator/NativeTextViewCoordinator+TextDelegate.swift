@@ -77,6 +77,9 @@ extension NativeTextViewCoordinator {
         (tv as? NativeTextView)?.refreshPlaceholderVisibility()
         // Raw mode: display IS storage — sync the binding, skip the restyle.
         if configuration.rawSourceMode {
+            // Raw mode has no Markdown restyle pass to reapply focus after an
+            // edit, so update the rendering-only overlay directly.
+            applyFocusRendering(to: tv)
             guard !tv.hasMarkedText() else { return }
             if tv.string != lastSyncedText {
                 let rawText = tv.string
@@ -102,14 +105,20 @@ extension NativeTextViewCoordinator {
                 wtDetectedMode = .rewrite
             }
         }
-        if wtActive && wtDetectedMode == .proofread { return }
+        if wtActive && wtDetectedMode == .proofread {
+            applyFocusRendering(to: tv)
+            return
+        }
 
 
         let rawSelRange = tv.selectedRange()
         let docString = tv.string
         let fullText = docString as NSString
         let fullLength = fullText.length
-        guard !tv.hasMarkedText() else { return }
+        guard !tv.hasMarkedText() else {
+            applyFocusRendering(to: tv)
+            return
+        }
         let safeLocation = min(rawSelRange.location, fullLength)
         let safeSelRange = NSRange(location: safeLocation, length: 0)
         previousCaretLocation = safeSelRange.location
@@ -356,6 +365,13 @@ extension NativeTextViewCoordinator {
 
     public func textViewDidChangeSelection(_ notification: Notification) {
         guard let tv = notification.object as? NSTextView else { return }
+        // Every selection movement changes sentence/paragraph focus, including
+        // paths that intentionally skip Markdown selection handling below.
+        defer {
+            if !isRebuildingDocument {
+                applyFocusRendering(to: tv)
+            }
+        }
         // Raw mode: plain source — no reveal, snap-back, or inline previews.
         if configuration.rawSourceMode { return }
         if isWritingToolsActive { return }

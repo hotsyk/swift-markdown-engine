@@ -11,7 +11,126 @@
 
 import AppKit
 
+/// Pure viewport geometry used by typewriter mode.
+///
+/// The line rect must be expressed in document-view coordinates (including any
+/// header offset). The returned value is an `NSClipView.bounds.origin.y`; the
+/// caller remains responsible for clamping it to the document's scroll range.
+enum TypewriterCenteringGeometry {
+    static func targetScrollOriginY(
+        lineRect: CGRect,
+        viewportBounds: CGRect,
+        contentInsets: NSEdgeInsets
+    ) -> CGFloat {
+        lineRect.midY - unobscuredCenterOffset(
+            viewportHeight: viewportBounds.height,
+            contentInsets: contentInsets
+        )
+    }
+
+    /// Blank space before the text body that lets even its first visual line
+    /// reach the unobscured viewport center. The actual line midpoint is below
+    /// the body's origin, so this is a conservative, font-independent bound.
+    static func requiredTopSlack(
+        viewportHeight: CGFloat,
+        contentInsets: NSEdgeInsets
+    ) -> CGFloat {
+        max(
+            unobscuredCenterOffset(
+                viewportHeight: viewportHeight,
+                contentInsets: contentInsets
+            ),
+            0
+        )
+    }
+
+    /// Minimum extra document height that guarantees a line whose midpoint is
+    /// at (or above) the measured content bottom can reach the viewport center.
+    /// The actual final line ends above that bottom, so this is deliberately a
+    /// small conservative bound rather than a font-metric-dependent estimate.
+    static func requiredBottomSlack(
+        viewportHeight: CGFloat,
+        contentInsets: NSEdgeInsets
+    ) -> CGFloat {
+        max(
+            viewportHeight - unobscuredCenterOffset(
+                viewportHeight: viewportHeight,
+                contentInsets: contentInsets
+            ),
+            0
+        )
+    }
+
+    private static func unobscuredCenterOffset(
+        viewportHeight: CGFloat,
+        contentInsets: NSEdgeInsets
+    ) -> CGFloat {
+        let unobscuredHeight = max(
+            viewportHeight - contentInsets.top - contentInsets.bottom,
+            0
+        )
+        return contentInsets.top + unobscuredHeight / 2
+    }
+}
+
 extension NativeTextView {
+    /// Returns the caret's visual line in text-view-local coordinates.
+    ///
+    /// TextKit does not always expose a segment at end-of-document, so the
+    /// preceding UTF-16 unit is a deterministic fallback for a trailing caret.
+    func typewriterLineRect(atUTF16Offset requestedOffset: Int) -> CGRect? {
+        guard let layoutManager = textLayoutManager,
+              let contentManager = layoutManager.textContentManager else {
+            return nil
+        }
+
+        let documentLength = (string as NSString).length
+        let offset = min(max(requestedOffset, 0), documentLength)
+        var candidateOffsets = [offset]
+        if offset == documentLength, documentLength > 0 {
+            candidateOffsets.append(documentLength - 1)
+        }
+
+        for candidateOffset in candidateOffsets {
+            guard let location = contentManager.location(
+                layoutManager.documentRange.location,
+                offsetBy: candidateOffset
+            ) else { continue }
+            let range = NSTextRange(location: location)
+            layoutManager.ensureLayout(for: range)
+            var lineRect: CGRect?
+            layoutManager.enumerateTextSegments(
+                in: range,
+                type: .standard,
+                options: []
+            ) { _, rect, _, _ in
+                guard rect.height > 0 else { return true }
+                lineRect = rect
+                return false
+            }
+            if let lineRect { return lineRect }
+        }
+
+        // Empty documents and some extra-line-fragment states have no standard
+        // segment. Their first ensured fragment still supplies stable line metrics.
+        var fallback: CGRect?
+        layoutManager.enumerateTextLayoutFragments(
+            from: layoutManager.documentRange.endLocation,
+            options: [.reverse, .ensuresLayout, .ensuresExtraLineFragment]
+        ) { fragment in
+            if let line = fragment.textLineFragments.last {
+                fallback = line.typographicBounds.offsetBy(
+                    dx: fragment.layoutFragmentFrame.minX,
+                    dy: fragment.layoutFragmentFrame.minY
+                )
+            } else {
+                fallback = fragment.layoutFragmentFrame
+            }
+            return false
+        }
+        return fallback
+    }
+
     /// Real content height including overscroll, excluding the click-below-text inflation.
     var scrollableContentHeight: CGFloat {
         max(ceil(baseContentHeight + activeBottomOverscroll), 0)
@@ -36,10 +155,16 @@ extension NativeTextView {
         let resolvedOverscroll = resolvedOverscroll(
             baseContentHeight: measured,
             visibleHeight: visibleHeight,
+            contentInsets: scrollView.contentInsets,
             lineHeight: lineHeight
+        )
+        let resolvedTopOverscroll = resolvedTopOverscroll(
+            visibleHeight: visibleHeight,
+            contentInsets: scrollView.contentInsets
         )
 
         let baseHeightChanged = abs(measured - baseContentHeight) > 0.5
+        let topOverscrollChanged = abs(resolvedTopOverscroll - activeTopOverscroll) > 0.5
         let overscrollChanged = abs(resolvedOverscroll - activeBottomOverscroll) > 0.5
         // Height settled → stop forcing full layout (until the next switch/resize).
         if !(baseHeightChanged || overscrollChanged) { pendingFullLayoutMeasure = false }
@@ -49,8 +174,9 @@ extension NativeTextView {
         PerfTrace.note {
             "overscroll[\(debugTag)]: fullLayout=\(forcedFullLayout ? 1 : 0) h=\(Int(measured))\(baseHeightChanged ? " hChanged" : "")\(overscrollChanged ? " osChanged" : "")"
         }
-        guard baseHeightChanged || overscrollChanged else { return }
+        guard baseHeightChanged || topOverscrollChanged || overscrollChanged else { return }
         baseContentHeight = measured
+        activeTopOverscroll = resolvedTopOverscroll
         activeBottomOverscroll = resolvedOverscroll
         applyManagedFrameSize(width: targetWidth ?? frame.size.width)
     }
@@ -59,14 +185,34 @@ extension NativeTextView {
     /// re-measure. For header-band changes (runs per animation frame).
     func reapplyOverscrollPolicy(for scrollView: NSScrollView) {
         let lineHeight = layoutBridgeDefaultLineHeight(for: self.baseFont, using: layoutBridge)
+        let visibleHeight = scrollView.contentView.bounds.height
         let resolved = resolvedOverscroll(
             baseContentHeight: baseContentHeight,
-            visibleHeight: scrollView.contentView.bounds.height,
+            visibleHeight: visibleHeight,
+            contentInsets: scrollView.contentInsets,
             lineHeight: lineHeight
         )
-        guard abs(resolved - activeBottomOverscroll) > 0.5 else { return }
+        let resolvedTop = resolvedTopOverscroll(
+            visibleHeight: visibleHeight,
+            contentInsets: scrollView.contentInsets
+        )
+        guard abs(resolved - activeBottomOverscroll) > 0.5
+                || abs(resolvedTop - activeTopOverscroll) > 0.5 else { return }
+        activeTopOverscroll = resolvedTop
         activeBottomOverscroll = resolved
         applyManagedFrameSize(width: frame.size.width)
+    }
+
+    private func resolvedTopOverscroll(
+        visibleHeight: CGFloat,
+        contentInsets: NSEdgeInsets
+    ) -> CGFloat {
+        guard configuration.heightBehavior == .scrolls,
+              configuration.focusMode == .typewriter else { return 0 }
+        return TypewriterCenteringGeometry.requiredTopSlack(
+            viewportHeight: visibleHeight,
+            contentInsets: contentInsets
+        )
     }
 
     /// Shared policy evaluation, including the header band stacked above the text —
@@ -74,6 +220,7 @@ extension NativeTextView {
     private func resolvedOverscroll(
         baseContentHeight: CGFloat,
         visibleHeight: CGFloat,
+        contentInsets: NSEdgeInsets,
         lineHeight: CGFloat
     ) -> CGFloat {
         // Overscroll is a scroll-comfort affordance; meaningless without internal scrolling.
@@ -86,11 +233,24 @@ extension NativeTextView {
             activationStartFraction: configuration.overscroll.activationStartFraction,
             activationRangeFraction: configuration.overscroll.activationRangeFraction
         )
-        return policy.activeOverscroll(
+        let policySlack = policy.activeOverscroll(
             baseContentHeight: baseContentHeight,
             headerHeight: headerHeight,
             visibleHeight: visibleHeight,
             lineHeight: lineHeight
+        )
+        guard configuration.focusMode == .typewriter else { return policySlack }
+
+        // Ordinary overscroll is intentionally capped, but that cap can leave
+        // the final line below center in a tall window. Typewriter mode needs a
+        // geometry-derived floor so every line, including the last one, has a
+        // reachable centered scroll origin.
+        return max(
+            policySlack,
+            TypewriterCenteringGeometry.requiredBottomSlack(
+                viewportHeight: visibleHeight,
+                contentInsets: contentInsets
+            )
         )
     }
 

@@ -13,6 +13,25 @@ final class ClampedScrollView: NSScrollView {
     /// own height to SwiftUI and the enclosing scroll view owns paging.
     var fitsContent: Bool = false
 
+    /// Generation shared by deferred Typewriter centering and higher-priority
+    /// scroll intents. A find/restore/user scroll advances it synchronously, so a
+    /// centering block already queued on the main actor can recognize that it is
+    /// stale before changing the clip view.
+    private var typewriterCenteringGeneration: UInt = 0
+
+    func beginTypewriterCenteringRequest() -> UInt {
+        typewriterCenteringGeneration &+= 1
+        return typewriterCenteringGeneration
+    }
+
+    func cancelPendingTypewriterCentering() {
+        typewriterCenteringGeneration &+= 1
+    }
+
+    func isCurrentTypewriterCenteringRequest(_ generation: UInt) -> Bool {
+        generation == typewriterCenteringGeneration
+    }
+
     /// Saved at the start of every live-resize (including spurious one-click resizes triggered by edge-cursor clicks) so the position is restored when the resize ends. Without this, NSScrollView's default top-anchor-during-resize would jolt a bottom-anchored user back up by hundreds of points on a single edge click.
     private var scrollYBeforeLiveResize: CGFloat?
 
@@ -24,6 +43,9 @@ final class ClampedScrollView: NSScrollView {
     }
 
     override func scrollWheel(with event: NSEvent) {
+        // User navigation wins over caret centering even when both were enqueued
+        // during the same run-loop turn.
+        cancelPendingTypewriterCentering()
         if fitsContent {
             // No scrollable range — forward to the responder chain so the
             // enclosing (SwiftUI) scroll view receives the event. In the

@@ -167,6 +167,10 @@ extension NativeTextViewCoordinator {
     /// Highlight all matches (current one stronger) and scroll the current match into view.
     private func renderFindMatches(_ allRanges: [NSRange], currentIndex: Int) {
         guard let tv = textView else { return }
+        // Find navigation is an explicit scroll intent. Cancel synchronously even
+        // when the match is already visible, otherwise a Typewriter operation
+        // queued earlier in this run-loop turn can move away from that match.
+        (tv.enclosingScrollView as? ClampedScrollView)?.cancelPendingTypewriterCentering()
         let storage = tv.textStorage
         let fullRange = NSRange(location: 0, length: (tv.string as NSString).length)
 

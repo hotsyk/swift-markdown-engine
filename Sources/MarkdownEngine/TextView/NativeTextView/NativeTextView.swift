@@ -19,6 +19,9 @@ import UniformTypeIdentifiers
 final class NativeTextView: NSTextView {
     // MARK: Frame & overscroll state
     var baseContentHeight: CGFloat = 0
+    /// Blank document space before the body while Typewriter mode is active.
+    /// The container owns this space so the first visual line can reach center.
+    var activeTopOverscroll: CGFloat = 0
     var activeBottomOverscroll: CGFloat = 0
     var isApplyingManagedFrameSize = false
     /// Set on switch/resize to force full-layout height measurement until the cascade settles.
