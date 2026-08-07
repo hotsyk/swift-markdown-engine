@@ -514,6 +514,31 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
                 context.coordinator.restyleParagraphs([fullRange], in: textView)
             }
         }
+        // Sync the style-only configuration (theme palette, typography
+        // metrics, syntax highlighter, reading width) so runtime changes
+        // restyle in place. Before this, a theme switch was inert until the
+        // embedder recreated the view — which dropped undo history and the
+        // scroll position.
+        let newStyleFingerprint = configuration.styleFingerprint
+        let styleChanged = context.coordinator.lastStyleFingerprint != newStyleFingerprint
+        if styleChanged {
+            context.coordinator.lastStyleFingerprint = newStyleFingerprint
+            let oldReadingWidth = textView.configuration.readingWidth
+            context.coordinator.configuration.adoptStyle(from: configuration)
+            textView.configuration.adoptStyle(from: configuration)
+            // Reading width is normally fixed at creation; a value→value
+            // change (theme switch) re-fixes the wrap width. nil↔value
+            // transitions still require a view rebuild.
+            if let readingWidth = configuration.readingWidth,
+               oldReadingWidth != nil,
+               oldReadingWidth != readingWidth,
+               let textContainer = textView.textLayoutManager?.textContainer {
+                textContainer.size = NSSize(width: readingWidth, height: .greatestFiniteMagnitude)
+            }
+            // Fall through the early-return below so the rebuild applies the
+            // new attributes to the existing storage.
+            context.coordinator.didInitialFormatting = false
+        }
         textView.isEditable = isEditable
         textView.isSelectable = true
         textView.insertionPointColor = isEditable ? context.coordinator.configuration.theme.bodyText : .clear
@@ -586,7 +611,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.rebuildTextStorageAndStyle(
             textView,
             from: text,
-            invalidateLayout: isNodeSwitch || rawSourceModeChanged
+            invalidateLayout: isNodeSwitch || rawSourceModeChanged || styleChanged
         )
         textView.recalcOverscroll(for: nsView)
         (nsView as? ClampedScrollView)?.clampToInsets()
@@ -622,6 +647,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         )
         coordinator.documentId = documentId
         coordinator.configuration = configuration
+        coordinator.lastStyleFingerprint = configuration.styleFingerprint
         _ = coordinator.updateServiceFingerprints(for: configuration.services)
         coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         coordinator.onInlinePreviewKey = onInlinePreviewKey
