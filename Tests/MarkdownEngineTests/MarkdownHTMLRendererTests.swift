@@ -50,14 +50,39 @@ struct MarkdownHTMLRendererTests {
         #expect(html("---").contains("<hr"))
     }
 
-    @Test("GFM table")
-    func table() {
-        let md = "| A | B |\n| --- | --- |\n| 1 | 2 |"
-        let out = html(md)
-        #expect(out.contains("<table"))
-        #expect(out.contains("<th>A</th>"))
-        #expect(out.contains("<th>B</th>"))
-        #expect(out.contains("<td>1</td>"))
-        #expect(out.contains("<td>2</td>"))
+    @Test("GFM table renders semantic inline content in cells")
+    func tableInlineContent() {
+        let md = """
+        | Feature | Example | Status |
+        |:--------|:-------:|-------:|
+        | Bold | **strong** | Ready |
+        | Link | [open](https://example.com) | Ready |
+        | Code | `let value = 1` | Ready |
+        | Emoji | 🌈 | Ready |
+        """
+        #expect(html(md) == "<table><thead><tr><th>Feature</th><th>Example</th><th>Status</th></tr></thead><tbody><tr><td>Bold</td><td><strong>strong</strong></td><td>Ready</td></tr><tr><td>Link</td><td><a href=\"https://example.com\">open</a></td><td>Ready</td></tr><tr><td>Code</td><td><code>let value = 1</code></td><td>Ready</td></tr><tr><td>Emoji</td><td>🌈</td><td>Ready</td></tr></tbody></table>")
+    }
+
+    @Test("GFM table without outer pipes")
+    func tableWithoutOuterPipes() {
+        let md = """
+        Name | Value | Notes
+        :---- | :----: | ----:
+        Alpha | 1 | Left aligned
+        Beta | 2 | Center aligned
+        Gamma | 3 | Right aligned
+        """
+        #expect(html(md) == "<table><thead><tr><th>Name</th><th>Value</th><th>Notes</th></tr></thead><tbody><tr><td>Alpha</td><td>1</td><td>Left aligned</td></tr><tr><td>Beta</td><td>2</td><td>Center aligned</td></tr><tr><td>Gamma</td><td>3</td><td>Right aligned</td></tr></tbody></table>")
+    }
+
+    @Test("GFM table renders empty body cells")
+    func tableWithEmptyBodyCells() {
+        let md = """
+        | Name | Value | Notes |
+        | --- | --- | --- |
+        | Alpha | | Ready |
+        | Beta | 2 | |
+        """
+        #expect(html(md) == "<table><thead><tr><th>Name</th><th>Value</th><th>Notes</th></tr></thead><tbody><tr><td>Alpha</td><td></td><td>Ready</td></tr><tr><td>Beta</td><td>2</td><td></td></tr></tbody></table>")
     }
 }

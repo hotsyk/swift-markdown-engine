@@ -205,33 +205,47 @@ enum BlockLevelTokenizer {
         return tokens
     }
 
-    /// `^[ \t]*\|.+\|[ \t]*$` — a pipe, ≥1 char, a pipe (trailing ws allowed).
+    /// A GFM table row with two or more pipe-separated cells. Body cells may
+    /// be empty, and the leading and trailing pipes are independently optional.
     private static func isTableRow(_ s: NSString, _ start: Int, _ end: Int) -> Bool {
-        var i = start
-        while i < end, isWS(s.character(at: i)) { i += 1 }
-        guard i < end, s.character(at: i) == pipe else { return false }
-        var j = end
-        while j > i, isWS(s.character(at: j - 1)) { j -= 1 }
-        guard j - 1 > i, s.character(at: j - 1) == pipe else { return false }
-        return (j - 1) - (i + 1) >= 1
+        hasTableCells(s, start, end, separator: false)
     }
 
-    /// `^[ \t]*\|[- \t:|]+\|[ \t]*$` — outer pipes, inner only `- : | space tab`.
+    /// A GFM table separator. Outer pipes are optional, but every internal
+    /// pipe-separated cell must contain a dash and only separator characters.
     private static func isTableSeparator(_ s: NSString, _ start: Int, _ end: Int) -> Bool {
+        hasTableCells(s, start, end, separator: true)
+    }
+
+    /// Mirrors `BlockParser.tableCells`: strip optional outer pipes and require
+    /// an internal pipe. Empty cells are valid except in separator rows.
+    private static func hasTableCells(
+        _ s: NSString, _ start: Int, _ end: Int, separator: Bool
+    ) -> Bool {
         var i = start
         while i < end, isWS(s.character(at: i)) { i += 1 }
-        guard i < end, s.character(at: i) == pipe else { return false }
         var j = end
         while j > i, isWS(s.character(at: j - 1)) { j -= 1 }
-        guard j - 1 > i, s.character(at: j - 1) == pipe else { return false }
-        var k = i + 1
-        var count = 0
-        while k < j - 1 {
+        if i < j, s.character(at: i) == pipe { i += 1 }
+        if i < j, s.character(at: j - 1) == pipe { j -= 1 }
+
+        var internalPipes = 0
+        var cellHasDash = false
+        var k = i
+        while k < j {
             let c = s.character(at: k)
-            guard c == dash || c == space || c == tab || c == colon || c == pipe else { return false }
-            count += 1; k += 1
+            if c == pipe {
+                if separator, !cellHasDash { return false }
+                internalPipes += 1
+                cellHasDash = false
+            } else {
+                if separator,
+                   c != dash, c != colon, c != space, c != tab { return false }
+                if c == dash { cellHasDash = true }
+            }
+            k += 1
         }
-        return count >= 1
+        return internalPipes >= 1 && (!separator || cellHasDash)
     }
 
     // MARK: - Block LaTeX  (legacy `(?s)(?<!\$)\$\$(.+?)\$\$`)

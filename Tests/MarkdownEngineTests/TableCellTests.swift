@@ -56,6 +56,17 @@ struct TableCellTests {
         #expect(s.attribute(.backgroundColor, at: 0, effectiveRange: nil) != nil)
     }
 
+    @Test func linkRendersStyledLabelAndPreservesNestedFormatting() {
+        let s = cell("[**open**](https://example.com)")
+        let theme = MarkdownEditorConfiguration.default.theme
+
+        #expect(s.string == "open")
+        #expect(traits(s, "o").contains(.bold))
+        #expect(s.attribute(.link, at: 0, effectiveRange: nil) as? URL == URL(string: "https://example.com"))
+        #expect(s.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int == NSUnderlineStyle.single.rawValue)
+        #expect(s.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor == theme.link)
+    }
+
     @Test func strikethroughIsApplied() {
         let s = cell("~~gone~~")
         #expect(s.string == "gone")

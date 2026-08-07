@@ -63,7 +63,7 @@ public enum MarkdownHTMLRenderer {
             return "<pre>\(escape(ns.substring(with: range).trimmingCharacters(in: .newlines)))</pre>"
 
         case .table(let range):
-            return renderTable(range: range, ns: ns)
+            return renderTable(range: range, ns: ns, env: env)
 
         case .thematicBreak:
             return "<hr>"
@@ -178,16 +178,22 @@ public enum MarkdownHTMLRenderer {
         return lang.isEmpty ? nil : lang
     }
 
-    private static func renderTable(range: NSRange, ns: NSString) -> String {
+    private static func renderTable(range: NSRange, ns: NSString, env: Env) -> String {
         let raw = ns.substring(with: range)
         guard let parsed = MarkdownStyler.parseTableSource(raw) else {
             return "<pre>\(escape(raw.trimmingCharacters(in: .newlines)))</pre>"
         }
-        let head = parsed.header.map { "<th>\(escape($0))</th>" }.joined()
+        let head = parsed.header.map { "<th>\(renderTableCell($0, env: env))</th>" }.joined()
         let body = parsed.rows.map { row in
-            "<tr>" + row.map { "<td>\(escape($0))</td>" }.joined() + "</tr>"
+            "<tr>" + row.map { "<td>\(renderTableCell($0, env: env))</td>" }.joined() + "</tr>"
         }.joined()
         return "<table><thead><tr>\(head)</tr></thead><tbody>\(body)</tbody></table>"
+    }
+
+    private static func renderTableCell(_ source: String, env: Env) -> String {
+        let ns = source as NSString
+        let inlines = InlineParser.parse(source, registry: env.registry)
+        return renderInlines(inlines, ns: ns, env: env)
     }
 
     // MARK: - Inlines
