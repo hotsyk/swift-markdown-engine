@@ -68,6 +68,8 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
     /// returns the current value, regardless of when state changed.
     var lastImageFingerprint: AnyHashable?
     var lastWikiFingerprint: AnyHashable?
+    var lastFencedCodeBlockLayoutFingerprint: AnyHashable?
+    var lastStyleFingerprint: Int?
     private var busObservers: [NSObjectProtocol] = []
     private var registeredAppearanceObserverName: Notification.Name?
     weak var textView: NSTextView?
@@ -291,6 +293,23 @@ public final class NativeTextViewCoordinator: NSObject, NSTextViewDelegate {
         super.init()
         // Init + didSet share this helper so the observer tracks whichever service is current.
         subscribeToAppearanceNotification()
+    }
+
+    /// Compare and record service fingerprints from a SwiftUI configuration update.
+    func updateServiceFingerprints(for services: MarkdownEditorServices)
+        -> (images: Bool, wikiLinks: Bool, fencedCodeBlockLayout: Bool) {
+        let imageFingerprint = services.images.fingerprint()
+        let wikiFingerprint = services.wikiLinks.fingerprint()
+        let fencedCodeBlockLayoutFingerprint = services.fencedCodeBlockLayout.fingerprint()
+        let changes = (
+            images: imageFingerprint != lastImageFingerprint,
+            wikiLinks: wikiFingerprint != lastWikiFingerprint,
+            fencedCodeBlockLayout: fencedCodeBlockLayoutFingerprint != lastFencedCodeBlockLayoutFingerprint
+        )
+        lastImageFingerprint = imageFingerprint
+        lastWikiFingerprint = wikiFingerprint
+        lastFencedCodeBlockLayoutFingerprint = fencedCodeBlockLayoutFingerprint
+        return changes
     }
 
     /// (Re)register the syntax-highlighter appearance observer; idempotent and unsubscribes on nil.

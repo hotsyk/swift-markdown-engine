@@ -522,17 +522,14 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // (e.g. when the available wiki-link targets change). Cheap pointer-/
         // value-based comparison; full equality isn't required because the
         // embedder is the source of truth.
-        let newImageFingerprint = configuration.services.images.fingerprint()
-        let newWikiFingerprint = configuration.services.wikiLinks.fingerprint()
-        let imageChanged = newImageFingerprint != context.coordinator.lastImageFingerprint
-        let wikiChanged = newWikiFingerprint != context.coordinator.lastWikiFingerprint
-        if imageChanged || wikiChanged {
-            context.coordinator.lastImageFingerprint = newImageFingerprint
-            context.coordinator.lastWikiFingerprint = newWikiFingerprint
+        let serviceChanges = context.coordinator.updateServiceFingerprints(for: configuration.services)
+        if serviceChanges.images || serviceChanges.wikiLinks || serviceChanges.fencedCodeBlockLayout {
             context.coordinator.configuration.services = configuration.services
             textView.configuration.services = configuration.services
-            // Only an image change needs a layout re-measure; a wiki-link rename is style-only.
-            if imageChanged, let tlm = textView.textLayoutManager {
+            // Image and fenced-code reservation changes affect paragraph geometry;
+            // a wiki-link rename is style-only.
+            if serviceChanges.images || serviceChanges.fencedCodeBlockLayout,
+               let tlm = textView.textLayoutManager {
                 tlm.invalidateLayout(for: tlm.documentRange)
             }
             // Restyle live tv content — full rebuild would clobber paste-fresh embeds when `text` binding hasn't caught up.
@@ -540,6 +537,31 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
             if fullRange.length > 0 {
                 context.coordinator.restyleParagraphs([fullRange], in: textView)
             }
+        }
+        // Sync the style-only configuration (theme palette, typography
+        // metrics, syntax highlighter, reading width) so runtime changes
+        // restyle in place. Before this, a theme switch was inert until the
+        // embedder recreated the view — which dropped undo history and the
+        // scroll position.
+        let newStyleFingerprint = configuration.styleFingerprint
+        let styleChanged = context.coordinator.lastStyleFingerprint != newStyleFingerprint
+        if styleChanged {
+            context.coordinator.lastStyleFingerprint = newStyleFingerprint
+            let oldReadingWidth = textView.configuration.readingWidth
+            context.coordinator.configuration.adoptStyle(from: configuration)
+            textView.configuration.adoptStyle(from: configuration)
+            // Reading width is normally fixed at creation; a value→value
+            // change (theme switch) re-fixes the wrap width. nil↔value
+            // transitions still require a view rebuild.
+            if let readingWidth = configuration.readingWidth,
+               oldReadingWidth != nil,
+               oldReadingWidth != readingWidth,
+               let textContainer = textView.textLayoutManager?.textContainer {
+                textContainer.size = NSSize(width: readingWidth, height: .greatestFiniteMagnitude)
+            }
+            // Fall through the early-return below so the rebuild applies the
+            // new attributes to the existing storage.
+            context.coordinator.didInitialFormatting = false
         }
         textView.isEditable = isEditable
         textView.isSelectable = true
@@ -630,7 +652,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         context.coordinator.rebuildTextStorageAndStyle(
             textView,
             from: text,
-            invalidateLayout: isNodeSwitch || rawSourceModeChanged
+            invalidateLayout: isNodeSwitch || rawSourceModeChanged || styleChanged
         )
         textView.recalcOverscroll(for: nsView)
         (nsView as? ClampedScrollView)?.clampToInsets()
@@ -687,8 +709,8 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // arm the restore here or a remount would always open at the top.
         coordinator.armScrollRestore(for: documentId)
         coordinator.configuration = configuration
-        coordinator.lastImageFingerprint = configuration.services.images.fingerprint()
-        coordinator.lastWikiFingerprint = configuration.services.wikiLinks.fingerprint()
+        coordinator.lastStyleFingerprint = configuration.styleFingerprint
+        _ = coordinator.updateServiceFingerprints(for: configuration.services)
         coordinator.onCodeBlockSelectionChange = onCodeBlockSelectionChange
         coordinator.onInlinePreviewKey = onInlinePreviewKey
         coordinator.userPrefersContinuousSpellChecking = configuration.spellChecking.continuousSpellChecking
