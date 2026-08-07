@@ -436,8 +436,8 @@ enum BlockParser {
         return after == " " || after == "\t"
     }
 
-    /// A GFM table row with two or more meaningful pipe-separated cells.
-    /// The leading and trailing pipes are independently optional.
+    /// A GFM table row with two or more pipe-separated cells. Body cells may
+    /// be empty, and the leading and trailing pipes are independently optional.
     private static func isTableRow(_ line: String) -> Bool {
         tableCells(in: line) != nil
     }
@@ -453,8 +453,9 @@ enum BlockParser {
         }
     }
 
-    /// Strips optional outer pipes and returns non-empty cells only when the
-    /// remaining content contains a meaningful internal pipe separator.
+    /// Strips optional outer pipes and returns cells when the remaining content
+    /// contains a meaningful internal pipe separator. Empty cells are retained
+    /// for valid body rows; separator validation remains strict at the caller.
     private static func tableCells(in line: String) -> [Substring]? {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         var body = trimmed[...]
@@ -463,10 +464,7 @@ enum BlockParser {
         guard body.contains("|") else { return nil }
 
         let cells = body.split(separator: "|", omittingEmptySubsequences: false)
-        guard cells.count >= 2, cells.allSatisfy({
-            !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }) else { return nil }
-        return cells
+        return cells.count >= 2 ? cells : nil
     }
 
     /// A block-LaTeX opener: a line whose content starts with `$$`.

@@ -132,17 +132,32 @@ struct BlockParserTests {
         #expect(BlockParser.parse(trailingOnly) == [b(.table, 0, (trailingOnly as NSString).length)])
     }
 
+    @Test("GFM table body rows may contain empty cells")
+    func tableWithEmptyBodyCells() {
+        let text = "| Name | Value | Notes |\n| --- | --- | --- |\n| Alpha | | Ready |\n| Beta | 2 | |"
+        let length = (text as NSString).length
+
+        #expect(BlockParser.parse(text) == [b(.table, 0, length)])
+        let tokens = BlockLevelTokenizer.tokens(for: .table, in: text as NSString)
+        #expect(tokens.count == 1)
+        #expect(tokens.first?.range == NSRange(location: 0, length: length))
+        assertTiles(text)
+    }
+
     @Test("pipe-containing prose and malformed separators stay paragraphs")
     func pipeProseIsNotTable() {
         let prose = "Name | Value | Notes\nThis | is ordinary prose\nAlpha | 1 | Left aligned"
         let emptyCell = "Name | Value\n--- |   \nAlpha | 1"
+        let emptyMiddleSeparator = "| Name | Value | Notes |\n| --- | | --- |\n| Alpha | 1 | Ready |"
         let outerPipeOnly = "ordinary prose |\n| --- |\nmore prose |"
 
         #expect(BlockParser.parse(prose) == [b(.paragraph, 0, (prose as NSString).length)])
         #expect(BlockParser.parse(emptyCell) == [b(.paragraph, 0, (emptyCell as NSString).length)])
+        #expect(BlockParser.parse(emptyMiddleSeparator) == [b(.paragraph, 0, (emptyMiddleSeparator as NSString).length)])
         #expect(BlockParser.parse(outerPipeOnly) == [b(.paragraph, 0, (outerPipeOnly as NSString).length)])
         assertTiles(prose)
         assertTiles(emptyCell)
+        assertTiles(emptyMiddleSeparator)
         assertTiles(outerPipeOnly)
     }
 }

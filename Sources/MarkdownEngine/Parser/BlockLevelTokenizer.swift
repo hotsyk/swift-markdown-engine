@@ -205,8 +205,8 @@ enum BlockLevelTokenizer {
         return tokens
     }
 
-    /// A GFM table row with two or more meaningful pipe-separated cells.
-    /// The leading and trailing pipes are independently optional.
+    /// A GFM table row with two or more pipe-separated cells. Body cells may
+    /// be empty, and the leading and trailing pipes are independently optional.
     private static func isTableRow(_ s: NSString, _ start: Int, _ end: Int) -> Bool {
         hasTableCells(s, start, end, separator: false)
     }
@@ -217,8 +217,8 @@ enum BlockLevelTokenizer {
         hasTableCells(s, start, end, separator: true)
     }
 
-    /// Mirrors `BlockParser.tableCells`: strip optional outer pipes, then
-    /// require at least one internal pipe and non-empty cells on both sides.
+    /// Mirrors `BlockParser.tableCells`: strip optional outer pipes and require
+    /// an internal pipe. Empty cells are valid except in separator rows.
     private static func hasTableCells(
         _ s: NSString, _ start: Int, _ end: Int, separator: Bool
     ) -> Bool {
@@ -230,25 +230,22 @@ enum BlockLevelTokenizer {
         if i < j, s.character(at: j - 1) == pipe { j -= 1 }
 
         var internalPipes = 0
-        var cellHasContent = false
         var cellHasDash = false
         var k = i
         while k < j {
             let c = s.character(at: k)
             if c == pipe {
-                guard cellHasContent, !separator || cellHasDash else { return false }
+                if separator, !cellHasDash { return false }
                 internalPipes += 1
-                cellHasContent = false
                 cellHasDash = false
             } else {
                 if separator,
                    c != dash, c != colon, c != space, c != tab { return false }
-                if !isWS(c) { cellHasContent = true }
                 if c == dash { cellHasDash = true }
             }
             k += 1
         }
-        return internalPipes >= 1 && cellHasContent && (!separator || cellHasDash)
+        return internalPipes >= 1 && (!separator || cellHasDash)
     }
 
     // MARK: - Block LaTeX  (legacy `(?s)(?<!\$)\$\$(.+?)\$\$`)
