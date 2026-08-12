@@ -69,7 +69,7 @@ struct FindHighlightRestoreTests {
             let start = contentManager.offset(from: documentStart, to: range.location)
             let end = contentManager.offset(from: documentStart, to: range.endLocation)
             if offset >= start && offset < end {
-                color = attributes[.foregroundColor] as? NSColor
+                color = attributes[.markdownFocusForeground] as? NSColor
                 return false
             }
             return true

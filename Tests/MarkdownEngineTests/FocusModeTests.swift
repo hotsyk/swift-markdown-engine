@@ -158,11 +158,17 @@ struct FocusModeCoordinatorTests {
         let (coordinator, textView) = makeEditor(text, mode: .paragraph)
 
         textView.setSelectedRange(NSRange(location: 1, length: 0))
-        coordinator.applyFocusRendering(to: textView)
+        coordinator.textViewDidChangeSelection(Notification(
+            name: NSTextView.didChangeSelectionNotification,
+            object: textView
+        ))
         #expect(renderedForeground(textView, at: 7) == coordinator.configuration.theme.mutedText)
 
         textView.setSelectedRange(NSRange(location: 7, length: 0))
-        coordinator.applyFocusRendering(to: textView)
+        coordinator.textViewDidChangeSelection(Notification(
+            name: NSTextView.didChangeSelectionNotification,
+            object: textView
+        ))
         #expect(renderedForeground(textView, at: 1) == coordinator.configuration.theme.mutedText)
         #expect(renderedForeground(textView, at: 7) == nil)
     }
@@ -194,7 +200,7 @@ struct FocusModeCoordinatorTests {
             let start = contentManager.offset(from: documentStart, to: range.location)
             let end = contentManager.offset(from: documentStart, to: range.endLocation)
             if offset >= start && offset < end {
-                color = attributes[.foregroundColor] as? NSColor
+                color = attributes[.markdownFocusForeground] as? NSColor
                 return false
             }
             return true

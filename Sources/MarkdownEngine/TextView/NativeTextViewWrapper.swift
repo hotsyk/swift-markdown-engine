@@ -397,6 +397,16 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         return scrollView
     }
 
+    /// Runtime focus-setting boundary shared by `updateNSView` and transition tests.
+    /// Keeping this separate from the SwiftUI context makes the synchronous state,
+    /// rendering, and scroll-geometry update directly regression-testable.
+    func synchronizeFocusMode(
+        to textView: NativeTextView,
+        coordinator: NativeTextViewCoordinator
+    ) {
+        coordinator.synchronizeFocusMode(configuration.focusMode, to: textView)
+    }
+
     public func updateNSView(_ nsView: NSScrollView, context: Context) {
         guard let textView = nsView.nativeTextView else {
             return
@@ -444,12 +454,7 @@ public struct NativeTextViewWrapper: NSViewRepresentable {
         // of the style fingerprint so toggling it neither rebuilds storage nor
         // disturbs undo history or authored Markdown attributes. Keep this before
         // the Writing Tools early return so mode changes remain immediate.
-        let focusModeChanged = context.coordinator.configuration.focusMode != configuration.focusMode
-        context.coordinator.configuration.focusMode = configuration.focusMode
-        textView.configuration.focusMode = configuration.focusMode
-        if focusModeChanged {
-            context.coordinator.applyFocusRendering(to: textView)
-        }
+        synchronizeFocusMode(to: textView, coordinator: context.coordinator)
 
         if wtActive && isNodeSwitch {
             // User switched files while Writing Tools was active — discard the

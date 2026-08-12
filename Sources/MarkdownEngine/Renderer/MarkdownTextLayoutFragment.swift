@@ -31,6 +31,10 @@ extension NSAttributedString.Key {
     static let scrollableBlockSourceID = NSAttributedString.Key("ScrollableBlockSourceID")
     /// CGFloat — total reserved height (image + scroller strip) for overlay sizing.
     static let scrollableBlockTotalHeight = NSAttributedString.Key("ScrollableBlockTotalHeight")
+    /// NSColor — transient focus-mode foreground. Kept separate from authored
+    /// `.foregroundColor` and find's rendering `.backgroundColor`; the custom
+    /// fragment applies it only while drawing glyphs.
+    static let markdownFocusForeground = NSAttributedString.Key("MarkdownFocusForeground")
     /// NSValue(range:) — full multi-line range of a rendered table, used to scope width-change restyles.
     static let scrollableBlockFullRange = NSAttributedString.Key("ScrollableBlockFullRange")
 }
@@ -103,8 +107,13 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
         // 2. LaTeX images (behind text — hidden markers are invisible anyway)
         drawLatexImages(at: point, in: context)
 
-        // 3. Normal text
-        super.draw(at: point, in: context)
+        // 3. Normal text. TextKit does not reliably let a rendering
+        // `.foregroundColor` override an authored one, so focus uses its own
+        // rendering key and the fragment resolves it into each line's drawing
+        // copy. The source text storage is never changed.
+        if !drawTextWithFocusOverlay(at: point, in: context) {
+            super.draw(at: point, in: context)
+        }
 
         // 4. Task checkboxes (on top of hidden [ ]/[x] markers)
         drawTaskCheckboxes(at: point, in: context)
@@ -123,6 +132,93 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
     // MARK: - Helpers
 
+    /// Draws line-fragment copies whose foreground is resolved from the focus
+    /// rendering key. Other authored and rendering attributes (notably Markdown
+    /// backgrounds and find backgrounds) remain on the copies unchanged.
+    /// Returns false when no focus overlay intersects this layout fragment, so
+    /// the normal TextKit drawing path remains untouched.
+    private func drawTextWithFocusOverlay(at point: CGPoint, in context: CGContext) -> Bool {
+        guard let manager = textLayoutManager,
+              let content = manager.textContentManager,
+              let fragmentRange = fragmentNSRange else { return false }
+
+        let documentStart = content.documentRange.location
+        var renderingRuns: [(range: NSRange, attributes: [NSAttributedString.Key: Any])] = []
+        var hasFocusOverlay = false
+        manager.enumerateRenderingAttributes(from: rangeInElement.location, reverse: false) {
+            _, attributes, textRange in
+            let start = content.offset(from: documentStart, to: textRange.location)
+            let end = content.offset(from: documentStart, to: textRange.endLocation)
+            guard start != NSNotFound, end != NSNotFound else { return true }
+            if start >= NSMaxRange(fragmentRange) { return false }
+            let intersection = NSIntersectionRange(
+                NSRange(location: start, length: end - start),
+                fragmentRange
+            )
+            if intersection.length > 0, !attributes.isEmpty {
+                renderingRuns.append((
+                    NSRange(
+                        location: intersection.location - fragmentRange.location,
+                        length: intersection.length
+                    ),
+                    attributes
+                ))
+                hasFocusOverlay = hasFocusOverlay || attributes[.markdownFocusForeground] is NSColor
+            }
+            return true
+        }
+        guard hasFocusOverlay else { return false }
+
+        for line in textLineFragments {
+            // `NSTextLineFragment.attributedString` is immutable in normal
+            // TextKit operation. Build a replacement line from a mutable copy
+            // rather than attempting to mutate TextKit's source object. The
+            // source only contains storage attributes, so merge every effective
+            // rendering run (not just focus) to preserve Find backgrounds.
+            let drawing = NSMutableAttributedString(attributedString: line.attributedString)
+            for run in renderingRuns {
+                let intersection = NSIntersectionRange(run.range, line.characterRange)
+                guard intersection.length > 0 else { continue }
+                drawing.addAttributes(run.attributes, range: intersection)
+                if let color = run.attributes[.markdownFocusForeground] as? NSColor {
+                    drawing.addAttribute(.foregroundColor, value: color, range: intersection)
+                }
+            }
+            // A replacement NSTextLineFragment does not paint TextKit's
+            // rendering-only backgrounds reliably. Paint those spans in the
+            // same line coordinate system before drawing glyphs. Storage-owned
+            // backgrounds remain the replacement line's responsibility.
+            for run in renderingRuns {
+                guard let color = run.attributes[.backgroundColor] as? NSColor else { continue }
+                let intersection = NSIntersectionRange(run.range, line.characterRange)
+                guard intersection.length > 0 else { continue }
+                let start = line.locationForCharacter(at: intersection.location)
+                let end = line.locationForCharacter(at: NSMaxRange(intersection))
+                let bounds = line.typographicBounds
+                context.setFillColor(color.cgColor)
+                context.fill(CGRect(
+                    x: point.x + bounds.minX + start.x,
+                    y: point.y + bounds.minY,
+                    width: max(0, end.x - start.x),
+                    height: bounds.height
+                ))
+            }
+
+            let focusedLine = NSTextLineFragment(
+                attributedString: drawing,
+                range: line.characterRange
+            )
+            focusedLine.draw(
+                at: CGPoint(
+                    x: point.x + line.typographicBounds.minX,
+                    y: point.y + line.typographicBounds.minY
+                ),
+                in: context
+            )
+        }
+        return true
+    }
+
     /// NSRange in the document for this fragment's content.
     private var fragmentNSRange: NSRange? {
         guard let tcs = textLayoutManager?.textContentManager as? NSTextContentStorage else { return nil }
@@ -134,6 +230,31 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
 
     private var textStorage: NSTextStorage? {
         (textLayoutManager?.textContentManager as? NSTextContentStorage)?.textStorage
+    }
+
+    /// Resolves transient focus ink for a custom-drawn glyph. List markers do
+    /// not pass through TextKit's normal glyph drawing, so they must consult the
+    /// same rendering overlay as `drawTextWithFocusOverlay` without copying it
+    /// into authored text storage.
+    private func effectiveMarkerColor(atDocumentIndex docIndex: Int, fallback: NSColor) -> NSColor {
+        guard let manager = textLayoutManager,
+              let content = manager.textContentManager else { return fallback }
+
+        let documentStart = content.documentRange.location
+        var result = fallback
+        manager.enumerateRenderingAttributes(from: rangeInElement.location, reverse: false) {
+            _, attributes, textRange in
+            let start = content.offset(from: documentStart, to: textRange.location)
+            let end = content.offset(from: documentStart, to: textRange.endLocation)
+            guard start != NSNotFound, end != NSNotFound else { return true }
+            if start > docIndex { return false }
+            guard docIndex >= start, docIndex < end else { return true }
+            if let focusColor = attributes[.markdownFocusForeground] as? NSColor {
+                result = focusColor
+            }
+            return false
+        }
+        return result
     }
 
     /// Returns the drawing position for a character at `docIndex` (document-level NSRange location).
@@ -625,7 +746,11 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let isSelected = selectionRanges.contains(where: { NSIntersectionRange($0, attrRange).length > 0 })
             let raw = storageString.substring(with: attrRange)
             let glyph = (isSelected ? raw : "•") as NSString
-            let glyphAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: theme.bodyText]
+            let markerColor = self.effectiveMarkerColor(
+                atDocumentIndex: attrRange.location,
+                fallback: theme.bodyText
+            )
+            let glyphAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: markerColor]
 
             let markerWidth = (raw as NSString).size(withAttributes: [.font: font]).width
             let glyphWidth = glyph.size(withAttributes: glyphAttrs).width
@@ -667,7 +792,11 @@ final class MarkdownTextLayoutFragment: NSTextLayoutFragment {
             let isSelected = selectionRanges.contains(where: { NSIntersectionRange($0, attrRange).length > 0 })
             let raw = storageString.substring(with: attrRange)
             let glyph = (isSelected ? raw : number) as NSString
-            let glyphAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: theme.bodyText]
+            let markerColor = self.effectiveMarkerColor(
+                atDocumentIndex: attrRange.location,
+                fallback: theme.bodyText
+            )
+            let glyphAttrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: markerColor]
             let topY = pos.baselineY - font.ascender
             glyph.draw(at: CGPoint(x: pos.x, y: topY), withAttributes: glyphAttrs)
         }

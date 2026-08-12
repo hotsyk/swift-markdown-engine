@@ -9,42 +9,82 @@ import AppKit
 import Foundation
 
 extension NativeTextViewCoordinator {
+    /// Synchronizes the runtime focus mode across the coordinator and text view.
+    ///
+    /// This is the single transition path used by SwiftUI updates and tests. A
+    /// mismatch in either runtime owner counts as a transition, so geometry and
+    /// rendering are repaired even if one owner was updated independently.
+    func synchronizeFocusMode(_ focusMode: FocusMode, to textView: NativeTextView) {
+        let changed = configuration.focusMode != focusMode
+            || textView.configuration.focusMode != focusMode
+        configuration.focusMode = focusMode
+        textView.configuration.focusMode = focusMode
+        if changed {
+            applyFocusRendering(to: textView)
+        }
+    }
+
     /// Replaces the focus-mode rendering overlay without touching text storage.
     ///
     /// Markdown styling, extension ink, and find backgrounds remain authored
     /// attributes. Focus mode uses TextKit rendering attributes only, so removing
     /// the overlay reveals those attributes exactly as they were before.
     func applyFocusRendering(to textView: NSTextView) {
-        guard let layoutManager = textView.textLayoutManager,
-              let contentManager = layoutManager.textContentManager else {
-            return
+        let focusMode = configuration.focusMode
+        let nativeTextView = textView as? NativeTextView
+        if nativeTextView?.configuration.focusMode != focusMode {
+            nativeTextView?.configuration.focusMode = focusMode
         }
-
-        let documentRange = contentManager.documentRange
-        // Foreground rendering attributes in this editor are reserved for the
-        // focus overlay. Find uses a background rendering attribute, so clearing
-        // focus cannot disturb active search results.
-        layoutManager.removeRenderingAttribute(.foregroundColor, for: documentRange)
 
         // Selection and edit callbacks already refresh focus rendering. Queueing
         // centering from that shared path makes typewriter mode run after AppKit's
         // own caret reveal and the edit's synchronous layout work. Other modes
         // immediately return to the ordinary overscroll policy, removing the
         // typewriter-only bottom slack when the mode is switched off.
-        if configuration.focusMode == .typewriter {
+        if focusMode == .typewriter {
             scheduleTypewriterCentering(for: textView)
-        } else if let nativeTextView = textView as? NativeTextView,
-                  let scrollView = textView.enclosingScrollView {
-            nativeTextView.reapplyOverscrollPolicy(for: scrollView)
-            (scrollView as? ClampedScrollView)?.clampToInsets()
+        } else {
+            let scrollView = textView.enclosingScrollView
+            let clampedScrollView = scrollView as? ClampedScrollView
+            // Invalidate queued caret work before changing any geometry. A block
+            // from the previous typewriter mode may already be on the main queue.
+            clampedScrollView?.cancelPendingTypewriterCentering()
+
+            if let nativeTextView, let scrollView {
+                nativeTextView.reapplyOverscrollPolicy(for: scrollView)
+                // Removing top slack changes the text view's origin even when its
+                // viewport-filling size is unchanged, so restack explicitly rather
+                // than relying only on a frame-size notification.
+                (nativeTextView.superview as? NativeTextViewContainer)?.restack(
+                    propagateWidth: false
+                )
+                clampedScrollView?.clampToInsets()
+            }
         }
+
+        guard let layoutManager = textView.textLayoutManager,
+              let contentManager = layoutManager.textContentManager else {
+            return
+        }
+
+        let documentRange = contentManager.documentRange
+        // Focus owns a dedicated rendering key. Using `.foregroundColor` here
+        // is ineffective for runs that already have an authored foreground
+        // (extensions and syntax styling win when TextKit builds its line).
+        // The custom layout fragment resolves this key at draw time instead.
+        // Find continues to own `.backgroundColor` independently.
+        layoutManager.removeRenderingAttribute(.markdownFocusForeground, for: documentRange)
+        // Rendering attributes are maintained outside text storage. Rebuild the
+        // affected fragments after the overlay has been fully replaced so both
+        // adding focus and removing it immediately change effective glyph ink.
+        defer { layoutManager.invalidateLayout(for: documentRange) }
 
         let text = textView.string as NSString
         guard text.length > 0,
               let focusRange = FocusRangeResolver.resolve(
                 in: text,
                 selection: textView.selectedRange(),
-                mode: configuration.focusMode
+                mode: focusMode
               ) else {
             return
         }
@@ -70,7 +110,7 @@ extension NativeTextViewCoordinator {
                 continue
             }
             layoutManager.addRenderingAttribute(
-                .foregroundColor,
+                .markdownFocusForeground,
                 value: configuration.theme.mutedText,
                 for: textRange
             )
@@ -117,10 +157,11 @@ extension NativeTextViewCoordinator {
         (scrollView as? ClampedScrollView)?.clampToInsets()
     }
 
-    func scheduleTypewriterCentering(for textView: NSTextView) {
+    @discardableResult
+    func scheduleTypewriterCentering(for textView: NSTextView) -> UInt? {
         guard configuration.focusMode == .typewriter,
               let scrollView = textView.enclosingScrollView as? ClampedScrollView else {
-            return
+            return nil
         }
         // Issuing a new request also supersedes any older caret position that is
         // still waiting for AppKit's synchronous layout/reveal work to finish.
@@ -132,6 +173,7 @@ extension NativeTextViewCoordinator {
             }
             self.centerTypewriterCaret(in: textView)
         }
+        return generation
     }
 }
 
